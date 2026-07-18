@@ -63,9 +63,6 @@ export async function handleOnboardingStep(ctx: PayITContext): Promise<void> {
     case 'confirm_pin':
       return handleConfirmPin(ctx, text);
 
-    case 'verify_mnemonic':
-      return handleVerifyMnemonic(ctx, text);
-
     case 'restore_phrase':
       return handleRestorePhrase(ctx, text);
 
@@ -93,8 +90,12 @@ export async function startOnboarding(ctx: PayITContext): Promise<void> {
     return;
   }
 
+  ctx.session.conversation.step = 'choose_type';
+  
   const keyboard = new InlineKeyboard()
-    .text('✅ I Agree — Create My Wallet', 'onboard_agree');
+    .text('👤 Personal', 'type_personal').row()
+    .text('💼 Business', 'type_business').row()
+    .text('🔀 Both', 'type_both');
 
   await ctx.reply(
     `*Welcome to PayIT!* 🚀\n\n` +
@@ -102,31 +103,16 @@ export async function startOnboarding(ctx: PayITContext): Promise<void> {
     `✅ *Easily ON/OFF ramp* your funds\n` +
     `✅ Send and receive payments globally in *Digital Dollars*\n` +
     `✅ *Add funds* in any currency and auto-convert to dollars\n` +
-    `✅ *Save* and earn yield effortlessly\n` +
+    `✅ *Save* to earn up to 10% APY\n` +
     `✅ *Pay bills* securely and track your business ledgers\n\n` +
     `📋 *By proceeding, you agree to our Terms of Service.*\n` +
-    `Your account is fully secure and private — please save your backup key carefully.`,
+    `Your account is fully secure and private — please save your backup key carefully.\n\n` +
+    `*What kind of account do you need?*`,
     { parse_mode: 'Markdown', reply_markup: keyboard },
   );
 }
 
-// ─── Choose Account Type ──────────────────────────────────────────────────────
 
-export async function showChooseAccountType(ctx: PayITContext): Promise<void> {
-  ctx.session.conversation.step = 'choose_type';
-  const keyboard = new InlineKeyboard()
-    .text('👤 Personal', 'type_personal').row()
-    .text('💼 Business', 'type_business').row()
-    .text('🔀 Both', 'type_both');
-
-  await ctx.reply(
-    '*What kind of wallet do you need?*\n\n' +
-    '👤 *Personal* — Send and receive money\n' +
-    '💼 *Business* — Invoicing, VAT/WHT, and ledger\n' +
-    '🔀 *Both* — Full access to all features',
-    { parse_mode: 'Markdown', reply_markup: keyboard },
-  );
-}
 
 async function handleChooseType(ctx: PayITContext): Promise<void> {
   const data = ctx.callbackQuery?.data;
@@ -170,9 +156,64 @@ async function handleBusinessOnboarding(ctx: PayITContext, text: string): Promis
     ctx.session.conversation.step = 'bus_logo';
     await ctx.reply('🖼️ Please send a link to your **Business Logo** (or type "skip"):');
   } else if (step === 'bus_logo') {
+    // Save business data
+    ctx.session.conversation.pendingMnemonic = text; // Reuse for business logo
+
     // Complete setup
-    ctx.session.conversation.step = 'set_pin';
-    await ctx.reply('🔒 Let\'s secure your account.\n\nPlease enter a 4-digit PIN:');
+    if (ctx.session.userId) {
+      // They are upgrading. Ask for existing PIN to create the wallet.
+      const { requestPin } = await import('./pin.js');
+      await requestPin(
+        ctx,
+        WalletType.PERSONAL,
+        'Create Business Account',
+        async (pinCtx, signer) => {
+          await pinCtx.reply('⏳ Creating your Business account on Monad...');
+          
+          const pin = pinCtx.message?.text?.trim() || '';
+          if (pin) {
+            await walletService.createWallet(ctx.session.userId!, pin, WalletType.BUSINESS);
+          }
+
+          const busName = ctx.session.conversation.pendingRecipient;
+          const busAddress = ctx.session.conversation.pendingAmount;
+          const busEmail = ctx.session.conversation.pendingInvoiceId;
+          const busLogo = ctx.session.conversation.pendingMnemonic;
+
+          // Switch active wallet and account type, and save business details
+          ctx.session.activeWallet = WalletType.BUSINESS;
+          await prisma.user.update({
+            where: { id: ctx.session.userId },
+            data: { 
+              activeWallet: WalletType.BUSINESS,
+              accountType: AccountType.BOTH,
+              businessName: busName,
+              businessAddress: busAddress,
+              businessEmail: busEmail,
+              businessLogo: busLogo === 'skip' ? null : busLogo,
+            },
+          });
+
+          ctx.session.conversation = {}; // Clear onboarding state
+
+          await pinCtx.reply(
+            '✅ *Business Account Created!*\n\n' +
+            'You have successfully upgraded. You can now access invoices and business tools.',
+            { parse_mode: 'Markdown' }
+          );
+
+          await pinCtx.reply(mainMenuText(AccountType.BOTH, WalletType.BUSINESS), {
+            parse_mode: 'Markdown',
+            reply_markup: mainMenuKeyboard(AccountType.BOTH, WalletType.BUSINESS),
+          });
+        }
+      );
+    } else {
+      // They are brand new users.
+      ctx.session.conversation.step = 'set_pin';
+      const promptMsg = await ctx.reply('🔒 Let\'s secure your account.\n\nPlease enter a 4-digit PIN:');
+      setTimeout(async () => { try { await ctx.api.deleteMessage(ctx.chat!.id, promptMsg.message_id); } catch(e){} }, 60000);
+    }
   }
 }
 
@@ -191,9 +232,14 @@ async function handleSetPin(ctx: PayITContext, pin: string): Promise<void> {
   tempPinStore.set(telegramId, { pin, step: 'set' });
   ctx.session.conversation.step = 'confirm_pin';
 
-  await ctx.reply('✅ Got it. Now *confirm your PIN* by entering it again:', {
+  if (ctx.message?.message_id) {
+    setTimeout(async () => { try { await ctx.api.deleteMessage(ctx.chat!.id, ctx.message!.message_id); } catch(e){} }, 30000);
+  }
+
+  const promptMsg = await ctx.reply('✅ Got it. Now *confirm your PIN* by entering it again:', {
     parse_mode: 'Markdown',
   });
+  setTimeout(async () => { try { await ctx.api.deleteMessage(ctx.chat!.id, promptMsg.message_id); } catch(e){} }, 60000);
 }
 
 // ─── Confirm PIN ──────────────────────────────────────────────────────────────
@@ -210,14 +256,19 @@ async function handleConfirmPin(ctx: PayITContext, confirmPin: string): Promise<
   if (stored.pin !== confirmPin) {
     tempPinStore.delete(telegramId);
     ctx.session.conversation.step = 'set_pin';
-    await ctx.reply("❌ PINs don't match. Let's try again. Enter your new PIN:");
+    const promptMsg = await ctx.reply("❌ PINs don't match. Let's try again. Enter your new PIN:");
+    setTimeout(async () => { try { await ctx.api.deleteMessage(ctx.chat!.id, promptMsg.message_id); } catch(e){} }, 60000);
     return;
+  }
+
+  if (ctx.message?.message_id) {
+    setTimeout(async () => { try { await ctx.api.deleteMessage(ctx.chat!.id, ctx.message!.message_id); } catch(e){} }, 30000);
   }
 
   const pin = stored.pin;
 
-  // Now create the wallet
-  await ctx.reply('⏳ Creating your wallet on Monad...');
+  // Now create the account
+  await ctx.reply('⏳ Creating your account on Monad...');
 
   try {
     const accountType = (ctx.session.conversation.pendingAction as AccountType) ?? AccountType.PERSONAL;
@@ -225,6 +276,11 @@ async function handleConfirmPin(ctx: PayITContext, confirmPin: string): Promise<
 
     // Create user record
     const pinHash = await hashPin(pin);
+    const busName = ctx.session.conversation.pendingRecipient;
+    const busAddress = ctx.session.conversation.pendingAmount;
+    const busEmail = ctx.session.conversation.pendingInvoiceId;
+    const busLogo = ctx.session.conversation.pendingMnemonic;
+
     const user = await prisma.user.create({
       data: {
         telegramId: telegramIdStr,
@@ -233,6 +289,10 @@ async function handleConfirmPin(ctx: PayITContext, confirmPin: string): Promise<
         lastName: ctx.from?.last_name,
         accountType,
         pinHash,
+        businessName: busName,
+        businessAddress: busAddress,
+        businessEmail: busEmail,
+        businessLogo: busLogo === 'skip' ? null : busLogo,
       },
     });
 
@@ -250,42 +310,28 @@ async function handleConfirmPin(ctx: PayITContext, confirmPin: string): Promise<
 
     // Update session
     ctx.session.userId = user.id;
+    ctx.session.userId = user.id;
     ctx.session.onboarded = true;
-    ctx.session.conversation = { step: 'verify_mnemonic' };
+    ctx.session.conversation = {};
 
-    // Store mnemonic temporarily for verification step
-    // We use a separate map — never session
-    tempPinStore.set(telegramId, {
-      pin: personalMnemonic, // Re-using map for mnemonic storage (named for step)
-      step: 'mnemonic',
+    await ctx.reply(
+      `🎉 *Account Created!*\n\n` +
+      `Your account is fully secured by your PIN.\n` +
+      `You can view your private keys in the Settings menu later.`,
+      { parse_mode: 'Markdown' },
+    );
+
+    // Show main menu immediately
+    const initialWallet = (accountType === AccountType.BUSINESS || accountType === AccountType.BOTH) 
+      ? WalletType.BUSINESS 
+      : WalletType.PERSONAL;
+      
+    ctx.session.activeWallet = initialWallet;
+
+    await ctx.reply(mainMenuText(user.accountType, initialWallet), {
+      parse_mode: 'Markdown',
+      reply_markup: mainMenuKeyboard(user.accountType, initialWallet),
     });
-
-    const mnemonicDisplay = formatMnemonicForTelegram(personalMnemonic);
-
-    await ctx.reply(
-      `🎉 *Wallet Created!*\n\n` +
-      `📍 Your wallet address:\n\`${personalAddress}\`\n\n` +
-      `🔑 *Recovery Phrase (tap to reveal)*\n\n` +
-      `${mnemonicDisplay}\n\n` +
-      `⚠️ *This is the ONLY way to recover your wallet.* Write it down and store it safely offline.\n\n` +
-      `PayIT will NEVER ask you for this phrase. Never share it with anyone.`,
-      { parse_mode: 'Markdown' },
-    );
-
-    // Ask for confirmation
-    const words = mnemonicToWords(personalMnemonic);
-    const checkPositions = [2, 6, 10]; // Ask for words at positions 3, 7, 11 (1-indexed)
-
-    ctx.session.conversation.pendingAction = checkPositions
-      .map((i) => `${i + 1}:${words[i]}`)
-      .join(',');
-
-    await ctx.reply(
-      `To confirm you saved your recovery phrase, please enter:\n\n` +
-      `Word #${checkPositions[0] + 1}, Word #${checkPositions[1] + 1}, Word #${checkPositions[2] + 1}\n\n` +
-      `(separated by spaces, e.g. \`apple mango river\`)`,
-      { parse_mode: 'Markdown' },
-    );
   } catch (err) {
     tempPinStore.delete(telegramId);
     ctx.session.conversation = {};
@@ -296,49 +342,6 @@ async function handleConfirmPin(ctx: PayITContext, confirmPin: string): Promise<
   }
 }
 
-// ─── Verify Mnemonic ──────────────────────────────────────────────────────────
-
-async function handleVerifyMnemonic(ctx: PayITContext, input: string): Promise<void> {
-  const telegramId = ctx.from!.id;
-  const checkSpec = ctx.session.conversation.pendingAction ?? '';
-
-  const checks = checkSpec.split(',').map((s) => {
-    const [pos, word] = s.split(':');
-    return { pos: parseInt(pos!), word: word! };
-  });
-
-  const inputWords = input.trim().toLowerCase().split(/\s+/);
-
-  const allCorrect = checks.every((check, i) => inputWords[i] === check.word);
-
-  if (!allCorrect) {
-    await ctx.reply(
-      "❌ Those words don't match. Please check your recovery phrase and try again.\n\n" +
-      `Enter Word #${checks[0]!.pos}, Word #${checks[1]!.pos}, Word #${checks[2]!.pos}:`,
-    );
-    return;
-  }
-
-  // Verification passed — clean up
-  tempPinStore.delete(telegramId);
-  ctx.session.conversation = {};
-
-  const user = await prisma.user.findUniqueOrThrow({
-    where: { id: ctx.session.userId },
-  });
-
-  await ctx.reply(
-    `✅ *Perfect! Your wallet is ready.*\n\n` +
-    `Your funds are 100% yours — PayIT cannot access them.\n\n` +
-    `Welcome to PayIT! 🚀`,
-    { parse_mode: 'Markdown' },
-  );
-
-  await ctx.reply(mainMenuText(user.accountType, WalletType.PERSONAL), {
-    parse_mode: 'Markdown',
-    reply_markup: mainMenuKeyboard(user.accountType, WalletType.PERSONAL),
-  });
-}
 
 // ─── Restore Flow ─────────────────────────────────────────────────────────────
 

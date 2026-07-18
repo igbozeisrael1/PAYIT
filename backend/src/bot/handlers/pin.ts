@@ -64,10 +64,17 @@ export async function requestPin(
 
   ctx.session.conversation.step = 'awaiting_pin';
 
-  await ctx.reply(
+  const promptMsg = await ctx.reply(
     `🔒 *Confirm with PIN*\n\n${actionDescription}\n\nEnter your PIN to proceed:`,
     { parse_mode: 'Markdown' },
   );
+
+  // Auto-destruct prompt after 60 seconds
+  setTimeout(async () => {
+    try {
+      await ctx.api.deleteMessage(ctx.chat!.id, promptMsg.message_id);
+    } catch (e) { /* ignore */ }
+  }, 60000);
 }
 
 /**
@@ -84,6 +91,15 @@ export async function handlePinEntry(ctx: PayITContext, pin: string): Promise<vo
   if (!pending) {
     await ctx.reply('No pending action found. Please start over.');
     return;
+  }
+
+  // Auto-destruct the user's PIN message after 30 seconds
+  if (ctx.message?.message_id) {
+    setTimeout(async () => {
+      try {
+        await ctx.api.deleteMessage(ctx.chat!.id, ctx.message!.message_id);
+      } catch (e) { /* ignore */ }
+    }, 30000);
   }
 
   try {

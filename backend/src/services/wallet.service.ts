@@ -75,10 +75,9 @@ class WalletService {
     const derivedNode = hdNode.derivePath("m/44'/60'/0'/0/0");
 
     const address = derivedNode.address;
-    const privateKeyHex = derivedNode.privateKey; // e.g., "0x..."
 
-    // Encrypt private key with PIN
-    const blob = encrypt(privateKeyHex, pin);
+    // Encrypt mnemonic with PIN (instead of private key) to allow HD derivation later
+    const blob = encrypt(mnemonic, pin);
     const serializedBlob = serializeBlob(blob);
 
     // Persist: KeyStore + Wallet (in a transaction)
@@ -113,9 +112,8 @@ class WalletService {
     const derivedNode = hdNode.derivePath("m/44'/60'/0'/0/0");
 
     const address = derivedNode.address;
-    const privateKeyHex = derivedNode.privateKey;
 
-    const blob = encrypt(privateKeyHex, newPin);
+    const blob = encrypt(mnemonic, newPin);
     const serializedBlob = serializeBlob(blob);
 
     await prisma.$transaction(async (tx) => {
@@ -138,6 +136,30 @@ class WalletService {
   }
 
   /**
+   * Decrypt and reveal the raw private key for export.
+   */
+  async revealPrivateKey(
+    userId: string,
+    pin: string,
+    walletType: WalletType,
+  ): Promise<string> {
+    const keyStore = await prisma.keyStore.findUnique({
+      where: { userId_walletType: { userId, walletType } },
+    });
+    if (!keyStore) {
+      throw new Error(`Keystore not found for ${userId} (${walletType})`);
+    }
+
+    const blob = deserializeBlob(keyStore.encryptedKeyBlob);
+    try {
+      const privateKey = decrypt(blob, pin);
+      return privateKey;
+    } catch {
+      throw new Error('Invalid PIN');
+    }
+  }
+
+  /**
    * Decrypt a user's private key in memory and return an ethers.js Wallet signer.
    * The signer is used to sign a single transaction, then discarded.
    *
@@ -148,6 +170,7 @@ class WalletService {
     userId: string,
     walletType: WalletType,
     pin: string,
+    childIndex: number = 0
   ): Promise<ethers.Wallet> {
     // 1. Check PIN lockout
     const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
@@ -176,13 +199,18 @@ class WalletService {
     });
 
     const blob = deserializeBlob(keyStore.encryptedKeyBlob);
-    const privateKeyHex = decrypt(blob, pin);
+    const mnemonic = decrypt(blob, pin);
 
-    // 5. Create ephemeral signer connected to Monad
-    const signer = new ethers.Wallet(privateKeyHex, blockchainService.provider);
+    // Derive the HD node
+    const seed = await mnemonicToSeed(mnemonic);
+    const hdNode = ethers.HDNodeWallet.fromSeed(seed);
+    const derivedNode = hdNode.derivePath(`m/44'/60'/0'/0/${childIndex}`);
+    
+    // Create ephemeral signer connected to Monad
+    const signer = new ethers.Wallet(derivedNode.privateKey, blockchainService.provider);
 
-    // Note: We do not zero privateKeyHex here because ethers.Wallet holds a reference.
-    // The signer should be used immediately and not stored beyond the current request.
+    // Zero the seed
+    seed.fill(0);
 
     return signer;
   }
@@ -191,9 +219,14 @@ class WalletService {
    * Get the on-chain USDC balance for a wallet address.
    */
   async getBalance(address: string): Promise<WalletBalance> {
-    const usdcRaw = await blockchainService.getUSDCBalance(address);
-    const usdc = ethers.formatUnits(usdcRaw, 6);
-    return { usdc, usdcRaw };
+    try {
+      const usdcRaw = await blockchainService.getUSDCBalance(address);
+      const usdc = ethers.formatUnits(usdcRaw, 6);
+      return { usdc, usdcRaw };
+    } catch (error) {
+      console.error(`[WalletService] Failed to get balance for ${address}:`, error);
+      return { usdc: '0.0', usdcRaw: 0n };
+    }
   }
 
   /**
@@ -231,6 +264,87 @@ class WalletService {
         data: { pinLockedUntil: lockedUntil, pinAttempts: 0 },
       });
     }
+  }
+  /**
+   * Derive a new deposit address specifically for an invoice.
+   */
+  async deriveNextInvoiceAddress(
+    userId: string,
+    pin: string,
+    walletType: WalletType
+  ): Promise<string> {
+    // 1. Get current invoiceCount
+    const wallet = await prisma.wallet.findUniqueOrThrow({
+      where: { userId_walletType: { userId, walletType } },
+    });
+
+    const childIndex = wallet.invoiceCount + 1; // 1-indexed for invoices (0 is main wallet)
+
+    // 2. Decrypt mnemonic and derive child node
+    const keyStore = await prisma.keyStore.findUniqueOrThrow({
+      where: { userId_walletType: { userId, walletType } },
+    });
+
+    const blob = deserializeBlob(keyStore.encryptedKeyBlob);
+    const mnemonic = decrypt(blob, pin);
+
+    const seed = await mnemonicToSeed(mnemonic);
+    const hdNode = ethers.HDNodeWallet.fromSeed(seed);
+    const derivedNode = hdNode.derivePath(`m/44'/60'/0'/0/${childIndex}`);
+    
+    seed.fill(0);
+
+    const newAddress = derivedNode.address;
+
+    // 3. Update invoiceCount
+    await prisma.wallet.update({
+      where: { id: wallet.id },
+      data: { invoiceCount: childIndex },
+    });
+
+    return newAddress;
+  }
+
+  /**
+   * Find the signer for a given deposit address by scanning child nodes up to maxIndex.
+   */
+  async findInvoiceSigner(
+    userId: string,
+    pin: string,
+    walletType: WalletType,
+    targetAddress: string,
+    maxIndex: number
+  ): Promise<ethers.Wallet | null> {
+    // 1. Check PIN and decrypt
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const pinOk = await verifyPin(pin, user.pinHash);
+    if (!pinOk) {
+      throw new Error('Incorrect PIN');
+    }
+
+    const keyStore = await prisma.keyStore.findUniqueOrThrow({
+      where: { userId_walletType: { userId, walletType } },
+    });
+
+    const blob = deserializeBlob(keyStore.encryptedKeyBlob);
+    const mnemonic = decrypt(blob, pin);
+    const seed = await mnemonicToSeed(mnemonic);
+    const hdNode = ethers.HDNodeWallet.fromSeed(seed);
+
+    // 2. Scan child nodes
+    let foundNode = null;
+    for (let i = 1; i <= maxIndex; i++) {
+      const derivedNode = hdNode.derivePath(`m/44'/60'/0'/0/${i}`);
+      if (derivedNode.address.toLowerCase() === targetAddress.toLowerCase()) {
+        foundNode = derivedNode;
+        break;
+      }
+    }
+
+    seed.fill(0);
+
+    if (!foundNode) return null;
+    return new ethers.Wallet(foundNode.privateKey, blockchainService.provider);
   }
 }
 

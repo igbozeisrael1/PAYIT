@@ -2,7 +2,7 @@
  * start.ts — /start command and main menu for PayIT bot.
  */
 
-import { InlineKeyboard } from 'grammy';
+import { Keyboard } from 'grammy';
 import { AccountType, WalletType } from '@prisma/client';
 import { PayITContext } from '../middleware/session.js';
 import { prisma } from '../../db/client.js';
@@ -19,44 +19,28 @@ export function mainMenuText(accountType: AccountType, activeWallet: WalletType)
   );
 }
 
-export function mainMenuKeyboard(accountType: AccountType, activeWallet: WalletType): InlineKeyboard {
-  const kb = new InlineKeyboard();
+export function mainMenuKeyboard(accountType: AccountType, activeWallet: WalletType): Keyboard {
+  const kb = new Keyboard();
 
   if (activeWallet === WalletType.PERSONAL) {
-    kb.text('🏦 Deposit', 'action_deposit')
-      .text('💸 Send', 'action_send')
-      .row()
-      .text('🧾 Generate Invoice', 'action_invoices')
-      .row()
-      .text('🏦 Savings & Yield', 'action_savings')
-      .text('🧾 Pay Bills', 'action_bills')
-      .row()
-      .text('⚙️ Settings', 'action_settings')
-      .text('❓ FAQ', 'action_faq')
-      .text('🎧 Support', 'action_support')
-      .row();
+    kb.text('💰 Balance').text('💸 Send').text('🏦 Deposit').row()
+      .text('🏦 Savings').text('💳 Pay Bills').text('📋 History').row()
+      .text('⚙️ Settings').text('🎧 Support').text('❓ FAQ').row();
     
     if (accountType === AccountType.BOTH || accountType === AccountType.BUSINESS) {
-      kb.text('💼 Switch to Business Account', 'action_switch');
+      kb.text('💼 Switch to Business Account');
     } else {
-      kb.text('💼 Upgrade to Business', 'type_business');
+      kb.text('💼 Upgrade to Business');
     }
   } else {
     // Business Wallet
-    kb.text('💸 Send', 'action_send')
-      .text('📥 Receive', 'action_receive')
-      .row()
-      .text('🧾 Invoice', 'action_invoices')
-      .text('💰 Pay Salaries', 'action_salaries')
-      .row()
-      .text('⚙️ Settings', 'action_settings')
-      .text('❓ FAQ', 'action_faq')
-      .text('🎧 Support', 'action_support')
-      .row()
-      .text('👤 Switch to Personal Account', 'action_switch');
+    kb.text('💰 Balance').text('💸 Send').text('📥 Receive').row()
+      .text('🧾 Invoices').text('📦 Pay Salaries').text('📋 History').row()
+      .text('⚙️ Settings').text('🎧 Support').text('❓ FAQ').row()
+      .text('👤 Switch to Personal Account');
   }
 
-  return kb;
+  return kb.resized();
 }
 
 // ─── /start Command ───────────────────────────────────────────────────────────
@@ -146,4 +130,15 @@ export async function handleBalance(ctx: PayITContext): Promise<void> {
   } catch {
     await ctx.reply('⚠️ Unable to fetch balance right now. Please try again shortly.');
   }
+}
+
+export async function handleUpgradeToBusiness(ctx: PayITContext): Promise<void> {
+  const telegramId = ctx.from?.id;
+  const userId = ctx.session.userId;
+  if (!telegramId || !userId) return;
+
+  // Instead of creating the wallet instantly, start the onboarding flow for the business details
+  ctx.session.conversation.pendingAction = AccountType.BOTH;
+  ctx.session.conversation.step = 'bus_name';
+  await ctx.reply('🏢 Let\'s set up your business account.\n\nPlease enter your **Business Name**:');
 }

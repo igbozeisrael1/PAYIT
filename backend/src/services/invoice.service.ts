@@ -26,6 +26,7 @@ export interface CreateInvoiceParams {
   vatEnabled: boolean;
   whtCategoryId: WhtCategoryId;
   dueDate?: Date;
+  depositAddress: string;
 }
 
 export interface InvoiceSummary {
@@ -37,6 +38,7 @@ export interface InvoiceSummary {
   dueDate: Date | null;
   paymentLink: string | null;
   onchainInvoiceId: string | null;
+  depositAddress: string | null;
 }
 
 // ─── Service ──────────────────────────────────────────────────────────────────
@@ -94,6 +96,7 @@ class InvoiceService {
         whtRate: breakdown.whtRate,
         total: breakdown.totalRaw.toString(),
         onchainInvoiceId: onchainId.toString(),
+        depositAddress: params.depositAddress,
         paymentLink,
         status: InvoiceStatus.SENT,
         sentAt: new Date(),
@@ -255,6 +258,63 @@ class InvoiceService {
     }
 
     return updatedIds;
+  }
+
+  /**
+   * Run frequently by cron job to detect payments for pending invoices.
+   */
+  async pollPendingInvoices(bot: any): Promise<void> {
+    const pending = await prisma.invoice.findMany({
+      where: {
+        status: { in: [InvoiceStatus.SENT, InvoiceStatus.PARTIAL] },
+        depositAddress: { not: null }
+      },
+      include: { wallet: { include: { user: true } } }
+    });
+
+    const { walletService } = await import('./wallet.service.js');
+    const { InlineKeyboard } = await import('grammy');
+
+    for (const invoice of pending) {
+      if (!invoice.depositAddress) continue;
+
+      try {
+        const balance = await walletService.getBalance(invoice.depositAddress);
+        const currentBalanceRaw = balance.usdcRaw;
+        const previouslyPaidRaw = BigInt(invoice.amountPaid);
+        const totalRequiredRaw = BigInt(invoice.total);
+
+        if (currentBalanceRaw > previouslyPaidRaw) {
+          // New payment detected!
+          let newStatus = invoice.status;
+          let msgText = '';
+
+          if (currentBalanceRaw < totalRequiredRaw) {
+            newStatus = InvoiceStatus.PARTIAL;
+            msgText = `🎉 **Partial Payment Detected!**\n\nYour client sent *$${balance.usdc} USDC* for Invoice to ${invoice.clientName}.\nAmount required: $${(Number(totalRequiredRaw)/1e6).toFixed(2)} USDC.`;
+          } else if (currentBalanceRaw > totalRequiredRaw) {
+            newStatus = InvoiceStatus.PARTIAL; // Leave it partial until swept
+            const over = currentBalanceRaw - totalRequiredRaw;
+            msgText = `🚨 **Overpayment Detected!**\n\nYour client sent *$${balance.usdc} USDC* for Invoice to ${invoice.clientName} (Overpaid by $${(Number(over)/1e6).toFixed(2)}).\n\nClick below to sweep funds and settle the invoice.`;
+          } else {
+            newStatus = InvoiceStatus.PARTIAL;
+            msgText = `✅ **Exact Payment Detected!**\n\nYour client fully paid *$${balance.usdc} USDC* for Invoice to ${invoice.clientName}.\n\nClick below to sweep funds and settle the invoice.`;
+          }
+
+          await prisma.invoice.update({
+            where: { id: invoice.id },
+            data: { amountPaid: currentBalanceRaw.toString(), status: newStatus }
+          });
+
+          const kb = new InlineKeyboard()
+            .text('🧹 Sweep Funds', `invoice_verify_${invoice.id}`);
+
+          await bot.api.sendMessage(invoice.wallet.user.telegramId, msgText, { parse_mode: 'Markdown', reply_markup: kb });
+        }
+      } catch (err) {
+        console.error(`[Invoice Poll] Error checking invoice ${invoice.id}:`, err);
+      }
+    }
   }
 }
 

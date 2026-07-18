@@ -27,6 +27,16 @@ export const authMiddleware: Middleware<PayITContext> = async (ctx, next) => {
     return next();
   }
 
+  // Allow onboarding callbacks through
+  if (ctx.callbackQuery?.data?.startsWith('type_') || ctx.callbackQuery?.data === 'action_start_onboarding') {
+    return next();
+  }
+
+  // Allow if user is actively in the onboarding flow
+  if (ctx.session.conversation?.step) {
+    return next();
+  }
+
   // Require a registered Telegram user
   const telegramId = ctx.from?.id?.toString();
   if (!telegramId) {
@@ -50,10 +60,13 @@ export const authMiddleware: Middleware<PayITContext> = async (ctx, next) => {
   if (!user) {
     // Not registered — prompt to onboard
     if (isCommand || ctx.message?.text) {
+      const { InlineKeyboard } = await import('grammy');
+      const keyboard = new InlineKeyboard().text('🚀 Create Account', 'action_start_onboarding');
+
       await ctx.reply(
-        '👋 Welcome to *PayIT*! You don\'t have a wallet yet.\n\n' +
-        'Run /start to create your wallet in under 2 minutes.',
-        { parse_mode: 'Markdown' },
+        '👋 Welcome to *PayIT*! You don\'t have an Account yet.\n\n' +
+        'Click the button below to create your account in under 2 minutes.',
+        { parse_mode: 'Markdown', reply_markup: keyboard },
       );
     }
     return;

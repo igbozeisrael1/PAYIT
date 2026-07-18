@@ -221,9 +221,6 @@ async function handleSendRecipient(ctx: PayITContext, input: string): Promise<vo
   sendStateStore.set(telegramId, state);
 
   // Build confirmation message
-  const amountNumber = parseFloat(state.amount);
-  const feeNumber = amountNumber * 0.01;
-  const totalRequired = amountNumber + feeNumber;
 
   const escrowNote = !isExistingUser
     ? '\n\n⏳ *This person isn\'t on PayIT yet.* Funds will be held in escrow for 14 days. They\'ll receive an invite — if they don\'t join, you\'ll get a refund.'

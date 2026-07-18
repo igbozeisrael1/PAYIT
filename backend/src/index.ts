@@ -62,6 +62,15 @@ async function main(): Promise<void> {
     }
   });
 
+  // Every minute: poll pending invoices for payments
+  cron.schedule('* * * * *', async () => {
+    try {
+      await invoiceService.pollPendingInvoices(bot);
+    } catch (err) {
+      logger.error({ err }, 'Error during invoice polling');
+    }
+  });
+
   // Every day at 9am: mark overdue invoices
   cron.schedule('0 9 * * *', async () => {
     logger.info('[Cron] Processing overdue invoices...');

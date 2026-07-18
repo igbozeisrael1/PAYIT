@@ -29,6 +29,7 @@ const envSchema = z.object({
 
   // AI
   GROQ_API_KEY: z.string().optional(),
+  NVIDIA_API_KEY: z.string().optional(),
   AI_ENABLED: z.string().transform(v => v === 'true').default('true'),
 
   // On-ramp

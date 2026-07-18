@@ -6,8 +6,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
@@ -43,6 +44,7 @@ enum TransactionStatus {
 enum InvoiceStatus {
   DRAFT
   SENT
+  PARTIAL
   PAID
   OVERDUE
   CANCELLED
@@ -75,6 +77,10 @@ model User {
   pinAttempts  Int         @default(0)
   pinLockedUntil DateTime? // null = not locked
   activeWallet WalletType  @default(PERSONAL)
+  businessName   String?
+  businessAddress String?
+  businessEmail  String?
+  businessLogo   String?
   isActive     Boolean     @default(true)
   isFrozen     Boolean     @default(false) // Admin kill-switch (account only, not funds)
   createdAt    DateTime    @default(now())
@@ -118,6 +124,7 @@ model Wallet {
   // Cached on-chain balance (USDC, 6 decimals as string to avoid JS precision)
   cachedBalance  String     @default("0")
   lastSyncedAt   DateTime?
+  invoiceCount   Int        @default(0)
   createdAt      DateTime   @default(now())
 
   // Relations
@@ -178,10 +185,13 @@ model Invoice {
   whtAmount        String        // USDC base units
   whtRate          Float
   total            String        // USDC base units
+  amountPaid       String        @default("0") // Accumulated payments
   currency         String        @default("USDC")
   status           InvoiceStatus @default(DRAFT)
   // On-chain invoice ID from PayITInvoiceLedger (null until createInvoice tx confirmed)
   onchainInvoiceId String?
+  // HD wallet deposit address unique to this invoice
+  depositAddress   String?
   // Payment link shown to client
   paymentLink      String?
   dueDate          DateTime?

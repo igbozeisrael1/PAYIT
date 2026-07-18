@@ -16,62 +16,64 @@ export async function handleSwitchCommand(ctx: PayITContext): Promise<void> {
 
   const user = await prisma.user.findUniqueOrThrow({
     where: { id: userId },
-    select: { accountType: true, activeWallet: true },
+    select: { activeWallet: true },
   });
 
-  if (user.accountType === AccountType.PERSONAL) {
-    await ctx.reply('You only have a Personal wallet. Upgrade to Business to access invoicing!');
-    return;
-  }
-
-  if (user.accountType === AccountType.BUSINESS) {
-    await ctx.reply('You only have a Business wallet.');
-    return;
-  }
-
-  // User has BOTH — show switch keyboard
-  const currentLabel = user.activeWallet === WalletType.PERSONAL ? '👤 Personal' : '💼 Business';
-  const keyboard = new InlineKeyboard()
-    .text('👤 Personal Wallet', 'switch_personal')
-    .text('💼 Business Wallet', 'switch_business');
-
-  await ctx.reply(
-    `Currently active: *${currentLabel}*\n\nSwitch to:`,
-    { parse_mode: 'Markdown', reply_markup: keyboard },
-  );
+  const target = user.activeWallet === WalletType.PERSONAL ? WalletType.BUSINESS : WalletType.PERSONAL;
+  return switchToWallet(ctx, target);
 }
 
-export async function handleSwitchCallback(ctx: PayITContext): Promise<void> {
+export async function switchToWallet(ctx: PayITContext, target: WalletType): Promise<void> {
   const userId = ctx.session.userId;
   if (!userId) return;
 
-  const data = ctx.callbackQuery?.data ?? '';
-  const newWallet = data === 'switch_personal' ? WalletType.PERSONAL : WalletType.BUSINESS;
-
-  // Update DB and session
-  await prisma.user.update({
-    where: { id: userId },
-    data: { activeWallet: newWallet },
-  });
-  ctx.session.activeWallet = newWallet;
-
-  await ctx.answerCallbackQuery(`Switched to ${newWallet === WalletType.PERSONAL ? 'Personal' : 'Business'} wallet`);
-
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
 
+  // 1. Check if they already have the target wallet
+  const walletRecord = await walletService.getWallet(userId, target);
+
+  if (!walletRecord) {
+    // 2. They don't have it, so start the creation flow
+    if (target === WalletType.BUSINESS) {
+      const { handleUpgradeToBusiness } = await import('./start.js');
+      return handleUpgradeToBusiness(ctx);
+    } else {
+      // Create personal wallet flow (since they somehow bypassed it)
+      // We can just ask them to set a PIN for the new personal wallet
+      ctx.session.conversation.step = 'set_pin';
+      ctx.session.conversation.pendingAction = AccountType.BOTH; // Mark that they will now have both
+      await ctx.reply('🔒 Let\'s set up your Personal Account.\n\nPlease enter a 4-digit PIN:');
+      return;
+    }
+  }
+
+  // 3. They have the wallet, so switch to it
+  await prisma.user.update({
+    where: { id: userId },
+    data: { activeWallet: target },
+  });
+  ctx.session.activeWallet = target;
+
+  const updatedUser = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+
   // Fetch balance for the newly active wallet
-  const walletRecord = await walletService.getWallet(userId, newWallet);
-  const balance = walletRecord
-    ? await walletService.getBalance(walletRecord.address).catch(() => null)
-    : null;
+  const balance = await walletService.getBalance(walletRecord.address).catch(() => null);
   const balanceText = balance ? `\n💰 Balance: *$${parseFloat(balance.usdc).toFixed(2)} USDC*` : '';
 
-  await ctx.editMessageText(
-    `✅ Switched to *${newWallet === WalletType.PERSONAL ? '👤 Personal' : '💼 Business'}* wallet${balanceText}\n\n` +
-    mainMenuText(user.accountType, newWallet),
+  await ctx.reply(
+    `✅ Switched to *${target === WalletType.PERSONAL ? '👤 Personal' : '💼 Business'}* wallet${balanceText}\n\n` +
+    mainMenuText(updatedUser.accountType, target),
     {
       parse_mode: 'Markdown',
-      reply_markup: mainMenuKeyboard(user.accountType, newWallet),
+      reply_markup: mainMenuKeyboard(updatedUser.accountType, target),
     },
   );
+}
+
+// Keep handleSwitchCallback just in case any old inline keyboards are still clicked
+export async function handleSwitchCallback(ctx: PayITContext): Promise<void> {
+  await ctx.answerCallbackQuery();
+  const data = ctx.callbackQuery?.data ?? '';
+  const newWallet = data === 'switch_personal' ? WalletType.PERSONAL : WalletType.BUSINESS;
+  return switchToWallet(ctx, newWallet);
 }
