@@ -1,183 +1,65 @@
-# PayIT — Telegram-Native USDC Wallet on Monad
+# PayIT on Monad 🚀
 
-**PayIT** is a non-custodial digital wallet and SME finance tool built as a Telegram bot on top of the **Monad** blockchain. Users send and receive USDC, issue invoices with VAT/WHT support, and manage business finances — all from inside Telegram.
+PayIT is a cutting-edge Telegram bot application built on the **Monad blockchain testnet** that allows users to seamlessly manage personal and business crypto payments. It offers a secure, non-custodial wallet experience directly within Telegram.
 
----
+## 🎯 Product Overview
+PayIT transforms Telegram into a powerful financial tool. Users can create a secure crypto wallet attached to their Telegram account, secured via a PIN-encrypted keystore. They can instantly switch between **Personal** and **Business** profiles.
 
-## Architecture at a Glance
+### Key Features
+1. **Non-Custodial HD Wallets**: Every user gets a unique seed phrase. Keys are AES-encrypted with a user-defined 6-digit PIN before being stored in the database. The backend can only sign transactions when the user actively enters their PIN.
+2. **Business Invoicing**: Merchants can dynamically generate professional invoices for clients. The bot automatically creates a unique HD child deposit address for each invoice.
+3. **Automated Payment Detection**: A background cron worker automatically monitors the Monad blockchain for payments made to pending invoice addresses. When funds are detected, the bot instantly alerts the merchant on Telegram and provides a one-click "Sweep Funds" button to securely funnel the money into the main business wallet.
+4. **Smart Escrow Payments**: Users can send funds securely to other Telegram users using an Escrow smart contract. Funds remain locked until the recipient registers and claims them, ensuring trustless P2P transfers.
+5. **Dynamic Receipts (AI & SVG)**: Professional receipts and invoices are generated completely dynamically via code using custom SVG templates and rendered as high-quality images via Sharp, supporting custom fiat currencies and business logos.
 
-```
-PayITMonad/
-├── contracts/    Foundry smart contracts (Solidity)
-│                 ├── PayITInvoiceLedger.sol  — On-chain tamper-proof invoice ledger
-│                 ├── PayITEscrow.sol          — Pending transfer escrow
-│                 └── mocks/MockUSDC.sol       — Testnet ERC-20
-│
-├── backend/      Node.js / TypeScript monolith
-│                 ├── bot/       grammY Telegram bot (primary UX)
-│                 ├── services/  Business logic (wallet, blockchain, AI, tax, etc.)
-│                 ├── db/        Prisma + PostgreSQL
-│                 └── api/       Express REST API for dashboard
-│
-└── dashboard/    Vite + React web dashboard (read-only companion)
-```
+## 🛠 Technical Architecture
+PayIT relies on a robust and scalable tech stack:
 
----
+- **Telegram Framework**: [GrammY](https://grammy.dev/) powers the conversational interface and interactive inline keyboards.
+- **Backend**: Node.js and TypeScript.
+- **Database**: PostgreSQL (hosted on Neon) managed by **Prisma ORM**.
+- **Blockchain Interaction**: `ethers.js` connected to the Monad Testnet (`chainId: 10143`).
+- **Background Jobs**: `node-cron` orchestrates automatic payment detection and overdue invoice tracking without blocking the main event loop.
+- **Image Processing**: `sharp` converts dynamically generated SVGs into high-quality PNGs for Telegram photo delivery.
 
-## Network: Monad
+### Smart Contracts (Monad)
+- **PayITESCROW**: Handles locked P2P transfers based on the hashed identifier (Telegram ID or handle) of the recipient.
+- **PayITInvoiceLedger**: On-chain registry for merchant invoices, enabling transparent, immutable audit trails.
 
-| | Testnet | Mainnet |
-|--|--|--|
-| Chain ID | 10143 | 143 |
-| RPC | `https://testnet-rpc.monad.xyz` | `https://rpc.monad.xyz` |
-| Explorer | `testnet.monadvision.com` | `monadvision.com` |
-| USDC | MockUSDC (deploy yourself) | `0x754704Bc059F8C67012fEd69BC8A327a5aafb603` |
+## 🔒 Security
+- **Strictly Non-Custodial**: Seed phrases are encrypted using AES-256-CBC with the user's PIN acting as the decryption key. The raw seed is never stored or logged.
+- **Ephemeral Signers**: Ethers.js Wallet instances are instantiated in memory only when a PIN is provided and immediately zeroed out after the transaction is signed.
+- **Lockout Mechanism**: Brute-force attacks against the PIN are mitigated via a strict exponential lockout system in the database.
 
----
+## 🚀 Local Setup
 
-## Prerequisites
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/igboze/PayITMonad.git
+   cd PayITMonad/backend
+   ```
 
-- **Node.js** v20+
-- **PostgreSQL** (local or remote)
-- **Telegram Bot Token** — get from [@BotFather](https://t.me/BotFather)
-- **Groq API Key** — get from [console.groq.com](https://console.groq.com) (optional, for AI assistant)
-- **Foundry** (WSL or Git Bash on Windows) — for smart contract deployment
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
 
----
+3. **Environment Configuration**:
+   Copy the example environment file and fill in your credentials.
+   ```bash
+   cp .env.example .env
+   ```
+   *You'll need a Telegram Bot Token (from BotFather), a Neon Postgres Database URL, and your Groq API key.*
 
-## Quick Start
+4. **Database Migration**:
+   ```bash
+   npx prisma db push
+   npx prisma generate
+   ```
 
-### 1. Smart Contracts
+5. **Start the Development Server**:
+   ```bash
+   npm run dev
+   ```
 
-Install Foundry (in WSL or Git Bash):
-```bash
-curl -L https://foundry.paradigm.xyz | bash
-foundryup
-```
-
-Deploy to Monad testnet:
-```bash
-cd contracts
-forge install  # If you have OpenZeppelin dependencies
-forge script script/Deploy.s.sol \
-  --rpc-url https://testnet-rpc.monad.xyz \
-  --private-key $OPERATOR_PRIVATE_KEY \
-  --broadcast
-```
-
-Copy the deployed contract addresses from the output.
-
-### 2. Backend
-
-```bash
-cd backend
-cp .env.example .env
-# Edit .env — fill in:
-#   TELEGRAM_BOT_TOKEN
-#   OPERATOR_PRIVATE_KEY
-#   INVOICE_LEDGER_ADDRESS
-#   ESCROW_ADDRESS
-#   USDC_ADDRESS
-#   DATABASE_URL
-#   JWT_SECRET, MAGIC_LINK_SECRET
-#   GROQ_API_KEY (optional)
-
-npm install
-npx prisma generate
-npx prisma migrate dev --name init
-npm run dev
-```
-
-### 3. Dashboard
-
-```bash
-cd dashboard
-cp .env.example .env  # set VITE_API_URL=http://localhost:3000
-npm install
-npm run dev
-```
-
-Dashboard will be available at `http://localhost:5173`.
-
----
-
-## Bot Commands
-
-| Command | Description |
-|--|--|
-| `/start` | Create wallet or open main menu |
-| `/send` | Send USDC to a user or address |
-| `/receive` | Get payment link + QR code |
-| `/deposit` | Naira → USDC on-ramp |
-| `/withdraw` | USDC → Naira off-ramp |
-| `/balance` | Check wallet balance |
-| `/invoices` | Invoice management (Business) |
-| `/history` | Transaction history |
-| `/switch` | Toggle Personal ↔ Business wallet |
-| `/restore` | Restore wallet from recovery phrase |
-| `/help` | Command reference |
-
-You can also type naturally — the AI assistant (powered by Groq) will parse your message and help you take action.
-
----
-
-## Smart Contract Design
-
-### PayITInvoiceLedger
-- Creates tamper-proof invoice records on Monad
-- On payment, atomically splits: net amount → business wallet, WHT → holding address
-- All records are publicly readable for auditors and tax authorities
-- Events: `InvoiceCreated`, `InvoicePaid`, `InvoiceCancelled`
-
-### PayITEscrow
-- Holds USDC for transfers to unregistered users
-- Releases on claim when recipient joins PayIT
-- Permissionless refund after expiry (default 14 days)
-- Events: `Deposited`, `Claimed`, `Refunded`
-
----
-
-## Security Design
-
-| Layer | Mechanism |
-|--|--|
-| Private key storage | AES-256-GCM, PIN-derived key via scrypt (N=2^17) |
-| PIN verification | bcrypt (rounds=12) checked before scrypt decrypt |
-| PIN rate limiting | 5 attempts → 15 min lockout |
-| Recovery phrase | Shown once, never stored, BIP-39 12-word |
-| Admin kill-switch | `isFrozen` flag freezes account UI, not funds |
-| Dashboard auth | Single-use magic links → HTTP-only JWT cookie |
-| AI security | AI never executes actions; user PIN required for all money movement |
-
----
-
-## Adding a Real On-Ramp Provider
-
-The `backend/src/services/ramp.service.ts` has a clean stub interface.
-To add Flutterwave:
-
-1. Set `RAMP_PROVIDER=flutterwave` in `.env`
-2. Implement the `flutterwave` branch in `_fetchRate()`, `initiateDeposit()`, and `initiateWithdrawal()`
-3. Add webhook endpoint in `backend/src/api/index.ts` for payment confirmation callbacks
-
----
-
-## Environment Variables
-
-See [`backend/.env.example`](backend/.env.example) for the full list with comments.
-
----
-
-## Development Tips
-
-- Run `npx prisma studio` to browse the database visually
-- The bot runs in polling mode locally (`BOT_WEBHOOK_URL` empty = polling)
-- Set `GROQ_API_KEY` to enable the AI assistant; without it, all bot commands still work
-- MockUSDC has a public `mint()` function — use it to fund test wallets
-- The dashboard is read-only in v1; all money-moving actions require the Telegram bot
-
----
-
-## License
-
-MIT
+This will spin up both the Express API and the Telegram bot polling mechanism simultaneously.
