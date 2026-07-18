@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+out/
+build/
+*.js.map
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/.forge/
+
+# Environment (NEVER commit these)
+.env
+.env.local
+.env.*.local
+backend/.env
+
+# Database
+*.sqlite
+*.db
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Prisma
+backend/src/db/prisma/migrations/
+
+# TypeScript
+*.tsbuildinfo

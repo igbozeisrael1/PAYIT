@@ -1,0 +1,333 @@
+// This is your Prisma schema file.
+// Learn more about it at: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum AccountType {
+  PERSONAL
+  BUSINESS
+  BOTH
+}
+
+enum WalletType {
+  PERSONAL
+  BUSINESS
+}
+
+enum TransactionType {
+  SEND
+  RECEIVE
+  DEPOSIT
+  WITHDRAWAL
+  INVOICE_PAID
+  ESCROW_LOCKED
+  ESCROW_CLAIMED
+  ESCROW_REFUNDED
+}
+
+enum TransactionStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum EscrowStatus {
+  PENDING
+  CLAIMED
+  REFUNDED
+}
+
+enum KycStatus {
+  NONE
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+// ─── User ────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String      @id @default(cuid())
+  telegramId   String      @unique
+  username     String?
+  firstName    String?
+  lastName     String?
+  accountType  AccountType @default(PERSONAL)
+  kycStatus    KycStatus   @default(NONE)
+  pinHash      String      // bcrypt hash of PIN
+  pinAttempts  Int         @default(0)
+  pinLockedUntil DateTime? // null = not locked
+  activeWallet WalletType  @default(PERSONAL)
+  isActive     Boolean     @default(true)
+  isFrozen     Boolean     @default(false) // Admin kill-switch (account only, not funds)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  // Relations
+  wallets      Wallet[]
+  contacts     Contact[]
+  magicLinks   MagicLink[]
+  aiLogs       AiLog[]
+
+  @@index([telegramId])
+}
+
+// ─── KeyStore (isolated from User for blast radius reduction) ─────────────────
+
+model KeyStore {
+  id               String     @id @default(cuid())
+  userId           String
+  walletType       WalletType
+  // AES-256-GCM encrypted private key blob.
+  // Format: JSON { iv, salt, authTag, encrypted } — all hex strings.
+  // NEVER store plaintext or partially-decrypted material here.
+  encryptedKeyBlob String     @db.Text
+  address          String     @unique // Public address derived from the key
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  @@unique([userId, walletType])
+  @@index([userId])
+  @@index([address])
+}
+
+// ─── Wallet ───────────────────────────────────────────────────────────────────
+
+model Wallet {
+  id             String     @id @default(cuid())
+  userId         String
+  walletType     WalletType
+  address        String     @unique
+  // Cached on-chain balance (USDC, 6 decimals as string to avoid JS precision)
+  cachedBalance  String     @default("0")
+  lastSyncedAt   DateTime?
+  createdAt      DateTime   @default(now())
+
+  // Relations
+  user           User         @relation(fields: [userId], references: [id])
+  transactions   Transaction[]
+  invoices       Invoice[]
+  escrowDeposits EscrowDeposit[]
+
+  @@unique([userId, walletType])
+  @@index([userId])
+  @@index([address])
+}
+
+// ─── Transaction ──────────────────────────────────────────────────────────────
+
+model Transaction {
+  id              String            @id @default(cuid())
+  walletId        String
+  // wallet_type is denormalized here to avoid an extra join when filtering by type
+  walletType      WalletType
+  type            TransactionType
+  status          TransactionStatus @default(PENDING)
+  // Amount in USDC base units (1 USDC = 1_000_000), stored as string
+  amount          String
+  // Human-readable counterparty (Telegram @handle, phone, or truncated address)
+  counterpartyRef String?
+  // On-chain tx hash (null for pending off-chain actions like ramp)
+  txHash          String?
+  // Reference for off-chain systems (payment processor ID, invoice ID, etc.)
+  externalRef     String?
+  fee             String?           // Network fee in USDC base units
+  note            String?
+  createdAt       DateTime          @default(now())
+  confirmedAt     DateTime?
+
+  wallet          Wallet @relation(fields: [walletId], references: [id])
+
+  @@index([walletId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ─── Invoice ─────────────────────────────────────────────────────────────────
+
+model Invoice {
+  id               String        @id @default(cuid())
+  walletId         String
+  clientName       String
+  clientEmail      String?
+  clientRef        String        // Hashed client identifier (mirrors on-chain)
+  // Line items stored off-chain as JSON. Hash of this matches on-chain lineItemsHash.
+  lineItems        Json
+  lineItemsHash    String        // keccak256 of lineItems JSON string (matches on-chain)
+  subtotal         String        // USDC base units
+  vatAmount        String        // USDC base units
+  vatRate          Float
+  whtAmount        String        // USDC base units
+  whtRate          Float
+  total            String        // USDC base units
+  currency         String        @default("USDC")
+  status           InvoiceStatus @default(DRAFT)
+  // On-chain invoice ID from PayITInvoiceLedger (null until createInvoice tx confirmed)
+  onchainInvoiceId String?
+  // Payment link shown to client
+  paymentLink      String?
+  dueDate          DateTime?
+  sentAt           DateTime?
+  paidAt           DateTime?
+  reminderSentAt   DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  wallet           Wallet @relation(fields: [walletId], references: [id])
+
+  @@index([walletId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ─── EscrowDeposit ────────────────────────────────────────────────────────────
+
+model EscrowDeposit {
+  id                String       @id @default(cuid())
+  senderWalletId    String
+  // Hash of the recipient identifier (phone, Telegram ID, etc.)
+  recipientHash     String
+  // Human-readable recipient ref for display (NOT the hash)
+  recipientRef      String
+  amount            String       // USDC base units
+  expiresAt         DateTime
+  status            EscrowStatus @default(PENDING)
+  // On-chain deposit ID from PayITEscrow contract
+  onchainDepositId  String?
+  resolvedAt        DateTime?
+  resolvedToAddress String?
+  createdAt         DateTime     @default(now())
+
+  senderWallet      Wallet @relation(fields: [senderWalletId], references: [id])
+
+  @@index([senderWalletId])
+  @@index([recipientHash])
+  @@index([status])
+  @@index([expiresAt])
+}
+
+// ─── Contact ──────────────────────────────────────────────────────────────────
+
+model Contact {
+  id              String   @id @default(cuid())
+  userId          String
+  label           String   // Display name for the contact
+  telegramHandle  String?
+  phoneNumber     String?
+  walletAddress   String?
+  createdAt       DateTime @default(now())
+
+  user            User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+// ─── RateSnapshot (on-ramp exchange rate locking) ────────────────────────────
+
+model RateSnapshot {
+  id            String   @id @default(cuid())
+  baseCurrency  String   // e.g. "NGN"
+  quoteCurrency String   // e.g. "USDC"
+  rate          Float    // How many quoteCurrency per 1 baseCurrency
+  expiresAt     DateTime // Rate locked for 60 seconds from creation
+  used          Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  @@index([baseCurrency, quoteCurrency])
+  @@index([expiresAt])
+}
+
+// ─── MagicLink (dashboard authentication) ─────────────────────────────────────
+
+model MagicLink {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique // Single-use random token (256-bit hex)
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User @relation(fields: [userId], references: [id])
+
+  @@index([token])
+  @@index([userId])
+}
+
+// ─── AiLog (AI intent monitoring) ─────────────────────────────────────────────
+
+model AiLog {
+  id              String   @id @default(cuid())
+  userId          String
+  inputMessage    String   @db.Text
+  parsedIntent    String?  // e.g. "sendMoney", "checkBalance"
+  confidence      Float?   // Model confidence score
+  parsedArgs      Json?    // Structured args extracted by AI
+  wasExecuted     Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  user            User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([parsedIntent])
+}
+
+// ─── BillPayment (placeholder) ────────────────────────────────────────────────
+model BillPayment {
+  id              String   @id @default(cuid())
+  walletId        String
+  billerId        String
+  billerName      String
+  amount          String
+  status          String   @default("PENDING")
+  referenceId     String?
+  createdAt       DateTime @default(now())
+
+  @@index([walletId])
+}
+
+// ─── YieldPosition (placeholder) ──────────────────────────────────────────────
+model YieldPosition {
+  id              String   @id @default(cuid())
+  walletId        String
+  protocolName    String   // e.g. "Aave", "Compound"
+  principalAmount String
+  accruedYield    String   @default("0")
+  status          String   @default("ACTIVE")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([walletId])
+}
+
+// ─── TokenSwap (placeholder) ──────────────────────────────────────────────────
+model TokenSwap {
+  id              String   @id @default(cuid())
+  walletId        String
+  fromToken       String
+  toToken         String   @default("USDC")
+  amountIn        String
+  amountOut       String?
+  status          String   @default("PENDING")
+  txHash          String?
+  createdAt       DateTime @default(now())
+
+  @@index([walletId])
+}
