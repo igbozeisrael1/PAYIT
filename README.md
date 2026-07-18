@@ -22,9 +22,11 @@ PayIT relies on a robust and scalable tech stack:
 - **Background Jobs**: `node-cron` orchestrates automatic payment detection and overdue invoice tracking without blocking the main event loop.
 - **Image Processing**: `sharp` converts dynamically generated SVGs into high-quality PNGs for Telegram photo delivery.
 
-### Smart Contracts (Monad)
-- **PayITESCROW**: Handles locked P2P transfers based on the hashed identifier (Telegram ID or handle) of the recipient.
-- **PayITInvoiceLedger**: On-chain registry for merchant invoices, enabling transparent, immutable audit trails.
+### Smart Contracts (Monad Testnet)
+The contracts are deployed and verified on the Monad testnet:
+- **Mock USDC:** `0x754704Bc059F8C67012fEd69BC8A327a5aafb603`
+- **PayITInvoiceLedger:** `0x50efB2814FD72a24ceEeCBCCefA97C2bE5df8132` (On-chain registry for merchant invoices, enabling transparent audit trails)
+- **PayITESCROW:** `0x9805642AF09a520d36fE5be111Ac4D86A585Bcbf` (Handles locked P2P transfers based on the hashed identifier of the recipient)
 
 ## 🔒 Security
 - **Strictly Non-Custodial**: Seed phrases are encrypted using AES-256-CBC with the user's PIN acting as the decryption key. The raw seed is never stored or logged.
