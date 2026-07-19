@@ -412,6 +412,8 @@ interface InvoiceImageParams {
   fiatCurrency: string;
   fiatAccountNumber: string;
   businessLogo?: string | null;
+  businessAddress?: string | null;
+  businessEmail?: string | null;
 }
 
 export async function generateInvoiceImage(params: InvoiceImageParams): Promise<Buffer> {
@@ -433,6 +435,10 @@ export async function generateInvoiceImage(params: InvoiceImageParams): Promise<
       console.error('[Invoice Image] Failed to load business logo:', e);
     }
   }
+
+  const nameY = logoSvg ? '150' : '100';
+  const emailY = logoSvg ? '175' : '125';
+  const addressY = logoSvg ? '195' : '145';
 
   const svgCode = `
 <svg width="800" height="1000" xmlns="http://www.w3.org/2000/svg">
@@ -462,7 +468,9 @@ export async function generateInvoiceImage(params: InvoiceImageParams): Promise<
   <text x="80" y="140" font-family="Arial, sans-serif" font-size="16" fill="#bfdbfe">Invoice ID: ${params.invoiceId}</text>
   
   ${logoSvg}
-  <text x="720" y="${logoSvg ? '150' : '100'}" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#ffffff" text-anchor="end">${params.businessName.substring(0, 30)}</text>
+  <text x="720" y="${nameY}" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#ffffff" text-anchor="end">${params.businessName.substring(0, 30)}</text>
+  ${params.businessEmail ? `<text x="720" y="${emailY}" font-family="Arial, sans-serif" font-size="14" fill="#bfdbfe" text-anchor="end">${params.businessEmail.substring(0, 40)}</text>` : ''}
+  ${params.businessAddress ? `<text x="720" y="${addressY}" font-family="Arial, sans-serif" font-size="14" fill="#bfdbfe" text-anchor="end">${params.businessAddress.substring(0, 40)}</text>` : ''}
   
   <!-- Client Info -->
   <text x="80" y="240" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#64748b">BILLED TO</text>

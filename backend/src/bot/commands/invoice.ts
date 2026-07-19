@@ -336,8 +336,10 @@ export async function handleInvoiceSendConfirm(ctx: PayITContext): Promise<void>
         const imageBuffer = await generateInvoiceImage({
           businessName: user?.businessName || user?.username || 'Your Business',
           businessLogo: user?.businessLogo,
+          businessAddress: user?.businessAddress,
+          businessEmail: user?.businessEmail,
           clientName: state.clientName,
-          invoiceId: invoice.id.toString(),
+          invoiceId: invoice.id.toString().substring(0, 8).toUpperCase(),
           totalAmount: breakdown.total,
           depositAddress: realAddress,
           items: state.lineItems,
