@@ -13,7 +13,7 @@
     "db:studio": "prisma studio",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate --schema=src/db/prisma/schema.prisma"
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",
