@@ -1,11 +1,16 @@
 # PayIT on Monad 🚀
 
-PayIT is a cutting-edge Telegram bot application built on the **Monad blockchain testnet** that allows users to seamlessly manage personal and business crypto payments. It offers a secure, non-custodial wallet experience directly within Telegram.
+PayIT is a simple app inside Telegram that helps African small business owners and everyday people send, save, and manage money using stablecoins, without needing a bank or a separate crypto app.
 
-## 🎯 Product Overview
-PayIT transforms Telegram into a powerful financial tool. Users can create a secure crypto wallet attached to their Telegram account, secured via a PIN-encrypted keystore. They can instantly switch between **Personal** and **Business** profiles.
+**Problems it solves:**
 
-### Key Features
+- **Hard access to stable money.** Many African currencies lose value fast. PayIT lets people hold and use stable digital dollars instead, protecting their money from local currency swings.
+- **Complicated cross-border payments.** Sending or receiving money across borders is often slow and expensive. PayIT makes it fast and simple, right inside a chat app people already use.
+- **Messy invoicing for small businesses.** Many SMEs struggle to track invoices, taxes, and payments properly. PayIT gives them a clean way to invoice customers and stay tax compliant, without needing accounting software.
+- **Crypto feels too technical for most people.** PayIT hides all the complexity. Users don't need to understand wallets, keys, or blockchains. It just feels like using a simple payments app inside Telegram.
+- **No separation between personal and business money.** PayIT gives users separate spaces for personal and business funds, so they can manage both without confusion.
+
+## 🎯 Key Features
 1. **Non-Custodial HD Wallets**: Every user gets a unique seed phrase. Keys are AES-encrypted with a user-defined 6-digit PIN before being stored in the database. The backend can only sign transactions when the user actively enters their PIN.
 2. **Business Invoicing**: Merchants can dynamically generate professional invoices for clients. The bot automatically creates a unique HD child deposit address for each invoice.
 3. **Automated Payment Detection**: A background cron worker automatically monitors the Monad blockchain for payments made to pending invoice addresses. When funds are detected, the bot instantly alerts the merchant on Telegram and provides a one-click "Sweep Funds" button to securely funnel the money into the main business wallet.
