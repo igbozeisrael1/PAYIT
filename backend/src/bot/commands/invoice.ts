@@ -5,6 +5,7 @@
 
 import { InlineKeyboard, InputFile } from 'grammy';
 import { InvoiceStatus, WalletType } from '@prisma/client';
+import { prisma } from '../../db/client.js';
 import { PayITContext } from '../middleware/session.js';
 import { walletService } from '../../services/wallet.service.js';
 import { invoiceService } from '../../services/invoice.service.js';
@@ -38,6 +39,7 @@ export async function handleInvoicesCommand(ctx: PayITContext): Promise<void> {
   const statusEmoji: Record<InvoiceStatus, string> = {
     DRAFT: '📝',
     SENT: '📨',
+    PARTIAL: '⏳',
     PAID: '✅',
     OVERDUE: '⚠️',
     CANCELLED: '❌',
@@ -75,11 +77,10 @@ export async function handleInvoicesCommand(ctx: PayITContext): Promise<void> {
 // ─── New Invoice Flow ─────────────────────────────────────────────────────────
 
 interface InvoiceState {
-  step: 'client' | 'items' | 'tax' | 'wht' | 'confirm';
+  step: 'client' | 'items' | 'tax' | 'wht' | 'fiat' | 'confirm';
   clientName: string;
   clientEmail: string;
   lineItems: Array<{ description: string; quantity: number; unitPrice: number }>;
-  vatEnabled: boolean;
   vatEnabled: boolean;
   whtCategoryId: WhtCategoryId;
   fiatCurrency: string;
@@ -96,7 +97,6 @@ export async function startNewInvoice(ctx: PayITContext): Promise<void> {
     clientName: '',
     clientEmail: '',
     lineItems: [],
-    vatEnabled: false,
     vatEnabled: false,
     whtCategoryId: 'none',
     fiatCurrency: 'USD',
@@ -298,7 +298,7 @@ export async function handleInvoiceSendConfirm(ctx: PayITContext): Promise<void>
     ctx,
     WalletType.BUSINESS,
     'Create Invoice',
-    async (pinCtx, signer) => {
+    async (pinCtx, _signer) => {
       await pinCtx.reply('⏳ Generating secure invoice address on Monad...');
 
       const pin = pinCtx.message?.text?.trim() || '';
@@ -318,6 +318,7 @@ export async function handleInvoiceSendConfirm(ctx: PayITContext): Promise<void>
           lineItems: state.lineItems,
           vatEnabled: state.vatEnabled,
           whtCategoryId: state.whtCategoryId,
+          depositAddress: realAddress,
         });
 
         invoiceStateStore.delete(telegramId);
@@ -431,7 +432,7 @@ export async function handleInvoiceVerify(ctx: PayITContext, invoiceId: string):
 
   try {
     const { requestPin } = await import('../handlers/pin.js');
-    await requestPin(ctx, WalletType.BUSINESS, 'Verify Payment', async (pinCtx, signer) => {
+    await requestPin(ctx, WalletType.BUSINESS, 'Verify Payment', async (pinCtx, _signer) => {
       await pinCtx.reply('🔄 Checking deposit address balance on Monad...');
       
       const pin = pinCtx.message?.text?.trim() || '';

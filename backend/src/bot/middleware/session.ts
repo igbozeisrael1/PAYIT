@@ -19,6 +19,7 @@ export interface ConversationState {
   pendingRecipient?: string;
   pendingInvoiceId?: string;
   pendingAction?: string;  // e.g., "send", "create_invoice"
+  pendingMnemonic?: string; // e.g. for wallet creation
 }
 
 export interface SessionData {

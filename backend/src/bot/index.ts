@@ -119,8 +119,8 @@ export function createBot(): Bot<PayITContext> {
     return handleBillsCommand(ctx);
   });
   bot.callbackQuery(/^bills_cat_/, async (ctx) => {
-    const { handleBillsCategory } = await import('./commands/bills.js');
-    return handleBillsCategory(ctx);
+    const { handleBillsCategorySelection } = await import('./commands/bills.js');
+    return handleBillsCategorySelection(ctx);
   });
 
   bot.callbackQuery('action_support', async (ctx) => {
@@ -335,7 +335,8 @@ export function createBot(): Bot<PayITContext> {
     const { handleSupportCommand } = await import('./commands/support.js');
     return handleSupportCommand(ctx);
   });
-  bot.hears('❓ FAQ', async (ctx) => {
+  bot.hears('❓ Support / FAQ', async (ctx) => {
+    // @ts-ignore
     const { handleFaqCommand } = await import('./commands/faq.js').catch(() => ({ handleFaqCommand: async (c: any) => c.reply('FAQ coming soon!') }));
     return handleFaqCommand(ctx);
   });
